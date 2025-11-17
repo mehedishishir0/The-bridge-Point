@@ -22,9 +22,9 @@
 // import Image from "next/image";
 // import { useAddPrice, useGetPrice } from "@/hooks/ApiClling";
 
-// const navigation = [
+// const allNavigation = [
 //   { name: "Dashboard", href: "/", icon: LayoutDashboard },
-//   { name: "Tenant Applications Management", href: "/tenant-applications", icon: FileText },
+//   { name:"Tenant Applications Management", href: "/tenant-applications", icon: FileText },
 //   { name: "Extermination Applications", href: "/extermination-applications", icon: Award },
 //   { name: "Apartment Listings Management", href: "/apartment-listings", icon: Home },
 //   { name: "Contactors", href: "/contactors", icon: ContactRound },
@@ -33,7 +33,24 @@
 //   { name: "Payments", href: "/payments", icon: CreditCard },
 //   { name: "Contacts", href: "/contacts", icon: Users },
 //   { name: "News Letter", href: "/newsletter", icon: Users },
+//   { name: "Admin Request", href: "/admin-request", icon: Users },
 //   { name: "Settings", href: "/settings", icon: Settings },
+ 
+// ];
+
+// // Admin-only allowed routes
+// const adminAllowedRoutes = [
+//   "/",
+//   "/tenant-applications",
+//   "/extermination-applications",
+//   "/apartment-listings",
+//   '/contactors',
+//   "/settings",
+//   "/contacts",
+//   "/bookings",
+//   "/services",
+//   "/contactors",
+//   "/payments",
 // ];
 
 // interface SidebarProps {
@@ -46,13 +63,27 @@
 //   const [isLogoutModalOpen, setIsLogoutModalOpen] = useState(false);
 //   const [isPriceModalOpen, setIsPriceModalOpen] = useState(false);
 //   const [price, setPrice] = useState("");
-//   const { data: session } = useSession()
-//   const token = session?.accessToken
-//   const user=session?.user.role
- 
-//   const getPrice = useGetPrice(token)
-//   const updatePrice = useAddPrice(token as string ,setIsPriceModalOpen)
-//   React.useEffect(() => {
+//   const { data: session } = useSession();
+//   const token = session?.accessToken as string | undefined;
+//   const userRole = session?.user?.role as string | undefined; 
+
+//   const getPrice = useGetPrice(token);
+//   const updatePrice = useAddPrice(token as string, setIsPriceModalOpen);
+
+//   // Filter navigation based on role
+//   const navigation = React.useMemo(() => {
+//     if (userRole === "superadmin") {
+//       return allNavigation;
+//     }
+//     if (userRole === "admin") {
+//       return allNavigation.filter((item) =>
+//         adminAllowedRoutes.includes(item.href)
+//       );
+//     }
+//     return []; // fallback
+//   }, [userRole]);
+
+//   useEffect(() => {
 //     document.body.style.overflow = isMobileMenuOpen ? "hidden" : "unset";
 //     return () => {
 //       document.body.style.overflow = "unset";
@@ -60,16 +91,19 @@
 //   }, [isMobileMenuOpen]);
 
 //   useEffect(() => {
-//     setPrice(getPrice?.data?.data?.applicationFee)
-//   }, [getPrice?.data?.data?.applicationFee])
+//     if (getPrice?.data?.data?.applicationFee !== undefined) {
+//       setPrice(getPrice.data.data.applicationFee.toString());
+//     }
+//   }, [getPrice?.data?.data?.applicationFee]);
 
 //   const handleLogout = async () => {
 //     await signOut({ callbackUrl: "/login" });
 //   };
 
 //   const handlePriceSubmit = () => {
-//     updatePrice.mutate({price:Number(price)})
-    
+//     if (price && !isNaN(Number(price))) {
+//       updatePrice.mutate({ price: Number(price) });
+//     }
 //   };
 
 //   const renderLinks = () =>
@@ -96,6 +130,8 @@
 //       );
 //     });
 
+//   const isSuperAdmin = userRole === "superadmin";
+
 //   return (
 //     <>
 //       {/* Overlay for mobile */}
@@ -108,11 +144,11 @@
 //       )}
 
 //       {/* Price Modal */}
-//       {isPriceModalOpen && (
+//       {isPriceModalOpen && isSuperAdmin && (
 //         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
 //           <div className="bg-white p-6 rounded-[8px] shadow-lg max-w-sm w-full">
 //             <h2 className="text-lg font-semibold text-[#0F3D61] mb-4">
-//               Enter Price
+//               Enter Application Fee
 //             </h2>
 //             <input
 //               type="number"
@@ -130,9 +166,11 @@
 //               </button>
 //               <button
 //                 onClick={handlePriceSubmit}
-//                 className="px-4 flex items-center py-2 rounded-[6px] bg-[#0F3D61] text-white hover:bg-[#0d3454]"
+//                 disabled={updatePrice.isPending}
+//                 className="px-4 flex items-center py-2 rounded-[6px] bg-[#0F3D61] text-white hover:bg-[#0d3454] disabled:opacity-70"
 //               >
-//                 Submit {updatePrice.isPending && <Loader2 className="animate-spin mr-2"/>}
+//                 {updatePrice.isPending && <Loader2 className="animate-spin mr-2 h-4 w-4" />}
+//                 Submit
 //               </button>
 //             </div>
 //           </div>
@@ -175,7 +213,7 @@
 //             width={1000}
 //             height={1000}
 //             alt="logo"
-//             className="w-full h-full"
+//             className="w-full h-full object-contain"
 //           />
 //         </div>
 
@@ -183,14 +221,16 @@
 //         <nav className="flex-1 py-6 space-y-1">
 //           {renderLinks()}
 
-//           {/* Price button (not a route) */}
-//           <button
-//             onClick={() => setIsPriceModalOpen(true)}
-//             className="flex items-center gap-3 px-4 py-3 text-[18px] font-normal text-[#0F3D61] rounded-lg hover:bg-[#0F3D6133]/20 transition-colors w-full"
-//           >
-//             <Tag className="w-5 h-5" />
-//             Price
-//           </button>
+//           {/* Price button - Only for superadmin */}
+//           {isSuperAdmin && (
+//             <button
+//               onClick={() => setIsPriceModalOpen(true)}
+//               className="flex items-center gap-3 px-4 py-3 text-[18px] font-normal text-[#0F3D61] rounded-lg hover:bg-[#0F3D6133]/20 transition-colors w-full"
+//             >
+//               <Tag className="w-5 h-5" />
+//               Price
+//             </button>
+//           )}
 
 //           {/* Logout button */}
 //           <button
@@ -205,8 +245,6 @@
 //     </>
 //   );
 // }
-
-
 
 
 "use client";
@@ -235,7 +273,7 @@ import { useAddPrice, useGetPrice } from "@/hooks/ApiClling";
 
 const allNavigation = [
   { name: "Dashboard", href: "/", icon: LayoutDashboard },
-  { name:"Tenant Applications Management", href: "/tenant-applications", icon: FileText },
+  { name: "Tenant Applications Management", href: "/tenant-applications", icon: FileText },
   { name: "Extermination Applications", href: "/extermination-applications", icon: Award },
   { name: "Apartment Listings Management", href: "/apartment-listings", icon: Home },
   { name: "Contactors", href: "/contactors", icon: ContactRound },
@@ -246,22 +284,6 @@ const allNavigation = [
   { name: "News Letter", href: "/newsletter", icon: Users },
   { name: "Admin Request", href: "/admin-request", icon: Users },
   { name: "Settings", href: "/settings", icon: Settings },
- 
-];
-
-// Admin-only allowed routes
-const adminAllowedRoutes = [
-  "/",
-  "/tenant-applications",
-  "/extermination-applications",
-  "/apartment-listings",
-  '/contactors',
-  "/settings",
-  "/contacts",
-  "/bookings",
-  "/services",
-  "/contactors",
-  "/payments",
 ];
 
 interface SidebarProps {
@@ -274,25 +296,48 @@ export function Sidebar({ isMobileMenuOpen = false, onClose }: SidebarProps) {
   const [isLogoutModalOpen, setIsLogoutModalOpen] = useState(false);
   const [isPriceModalOpen, setIsPriceModalOpen] = useState(false);
   const [price, setPrice] = useState("");
+  const [accessRoutes, setAccessRoutes] = useState<string[]>([]);
   const { data: session } = useSession();
   const token = session?.accessToken as string | undefined;
-  const userRole = session?.user?.role as string | undefined; 
+  const userRole = session?.user?.role as string | undefined;
 
   const getPrice = useGetPrice(token);
   const updatePrice = useAddPrice(token as string, setIsPriceModalOpen);
 
+  // Fetch profile to get dynamic accessRoutes
+  useEffect(() => {
+    const fetchProfile = async () => {
+      if (!token) return;
+      try {
+        const res = await fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL}/user/profile`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const data = await res.json();
+
+        if (data?.success && data?.data?.accessRoutes) {
+          setAccessRoutes(data.data.accessRoutes);
+        }
+      } catch (err) {
+        console.error("Failed to fetch profile:", err);
+      }
+    };
+    fetchProfile();
+  }, [token]);
+
   // Filter navigation based on role
   const navigation = React.useMemo(() => {
-    if (userRole === "superadmin") {
-      return allNavigation;
-    }
+    if (userRole === "superadmin") return allNavigation;
     if (userRole === "admin") {
-      return allNavigation.filter((item) =>
-        adminAllowedRoutes.includes(item.href)
+      // Include only routes that exist in accessRoutes
+      return allNavigation.filter(
+        (item) =>
+          item.href === "/" || // always allow dashboard
+          accessRoutes.includes(item.href.replace("/", "")) // match API route names
       );
     }
-    return []; // fallback
-  }, [userRole]);
+    return [];
+  }, [userRole, accessRoutes]);
+
 
   useEffect(() => {
     document.body.style.overflow = isMobileMenuOpen ? "hidden" : "unset";

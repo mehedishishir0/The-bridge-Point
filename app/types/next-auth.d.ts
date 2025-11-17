@@ -1,5 +1,5 @@
+/* eslint-disable */
 import NextAuth, { DefaultSession } from "next-auth";
-console.log(NextAuth)
 
 declare module "next-auth" {
   interface Session extends DefaultSession {
@@ -8,6 +8,8 @@ declare module "next-auth" {
       email?: string | null;
       name?: string | null;
       role?: string | null;
+      profileImage?: string | null;
+      accessRoutes?: string[];
     };
 
     accessToken?: string;
@@ -19,27 +21,30 @@ declare module "next-auth" {
   }
 
   interface User {
-    accessToken?: string;
-    refreshToken?: string;
     userId?: string;
     email?: string;
+    role?: string;
+    accessToken?: string;
+    refreshToken?: string;
+    profileImage?: string;
+    accessRoutes?: string[]; 
     message?: string;
     success?: boolean;
     statusCode?: number;
-    role?: string;
-    
   }
 }
 
 declare module "next-auth/jwt" {
   interface JWT {
-    accessToken?: string;
-    refreshToken?: string;
     userId?: string;
     email?: string;
+    role?: string;
+    accessToken?: string;
+    refreshToken?: string;
+    profileImage?: string;
+    accessRoutes?: string[]; 
     message?: string;
     success?: boolean;
     statusCode?: number;
-    role?: string;
   }
 }

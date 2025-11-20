@@ -1,6 +1,8 @@
+
+// app/(your-path)/EditApartment.tsx  (or wherever you keep it)
 "use client";
 
-import React, { useState, ChangeEvent } from "react";
+import React, { ChangeEvent, useEffect, useState } from "react";
 import { useRouter, useParams } from "next/navigation";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
@@ -12,8 +14,12 @@ import { Textarea } from "@/components/ui/textarea";
 import Image from "next/image";
 import { toast } from "sonner";
 import { useSession } from "next-auth/react";
+import type { Session } from "next-auth";
 
-interface FormData {
+/**
+ * Types
+ */
+type ApartmentForm = {
   title: string;
   description: string;
   aboutListing: string;
@@ -28,29 +34,20 @@ interface FormData {
   amenities: string[];
   day: string;
   month: string;
-  availableTime: string;
-}
+  availableTime: string; 
+};
 
-interface MediaFile {
+type MediaFile = {
   file?: File;
   url: string;
-}
+  remote?: boolean; 
+};
 
-interface ApartmentResponse {
+type ApartmentResponse = {
   statusCode: number;
   success: boolean;
   message: string;
   data: {
-    address: {
-      street: string;
-      city: string;
-      state: string;
-      zipCode: string;
-    };
-    availableFrom: {
-      month: string;
-      time: string;
-    };
     _id: string;
     title: string;
     description: string;
@@ -62,31 +59,122 @@ interface ApartmentResponse {
     amenities: string[];
     images: string[];
     videos: string[];
+    address: {
+      street: string;
+      city: string;
+      state: string;
+      zipCode: string;
+    };
+    availableFrom: {
+      month: string;
+      time: string; 
+    };
     day: string;
-    action: string;
-    status: string;
-    ownerId: string;
-    createdAt: string;
-    updatedAt: string;
-    __v: number;
+    createdAt?: string;
+    updatedAt?: string;
   };
-}
-
-const fetchApartment = async (id: string): Promise<ApartmentResponse> => {
-  const response = await fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL}/apartment/${id}`);
-  if (!response.ok) {
-    throw new Error("Failed to fetch apartment data");
-  }
-  return response.json();
 };
 
+
+type ExtendedSession = Session & {
+  accessToken?: string;
+  token?: string;
+  user?: Session["user"] & { accessToken?: string; token?: string };
+};
+
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
+
+/**
+ * Helpers
+ */
+const toDatetimeLocal = (iso?: string): string => {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(
+    d.getHours()
+  )}:${pad(d.getMinutes())}`;
+};
+
+const fetchApartment = async (id: string): Promise<ApartmentResponse> => {
+  if (!API_BASE) throw new Error("API base URL is not defined.");
+  const res = await fetch(`${API_BASE}/apartment/${id}`);
+  if (!res.ok) {
+    const txt = await res.text();
+    throw new Error(txt || "Failed to fetch apartment data");
+  }
+  return res.json();
+};
+
+const updateApartmentApi = async (id: string, payload: ApartmentForm, images: MediaFile[], videos: MediaFile[], token?: string) => {
+  if (!API_BASE) throw new Error("API base URL is not defined.");
+  const fd = new FormData();
+
+  fd.append("title", payload.title);
+  fd.append("description", payload.description);
+  fd.append("aboutListing", payload.aboutListing);
+  fd.append("price", payload.price);
+  fd.append("bedrooms", payload.bedrooms);
+  fd.append("bathrooms", payload.bathrooms);
+  fd.append("squareFeet", payload.squareFeet);
+  fd.append("address[street]", payload.street);
+  fd.append("address[city]", payload.city);
+  fd.append("address[state]", payload.state);
+  fd.append("address[zipCode]", payload.zipCode);
+
+  payload.amenities.forEach((a, i) => fd.append(`amenities[${i}]`, a));
+  fd.append("day", payload.day);
+  fd.append("availableFrom[month]", payload.month);
+
+  try {
+    const iso = new Date(payload.availableTime).toISOString();
+    fd.append("availableFrom[time]", iso);
+  } catch {
+    fd.append("availableFrom[time]", payload.availableTime);
+  }
+
+  // Append only new files (media.file exists)
+  images.forEach((m) => {
+    if (m.file) fd.append("images", m.file);
+  });
+  videos.forEach((m) => {
+    if (m.file) fd.append("videos", m.file);
+  });
+
+  const res = await fetch(`${API_BASE}/apartment/${id}`, {
+    method: "PUT",
+    headers: {
+      Authorization: token ? `Bearer ${token}` : "",
+      // DO NOT set Content-Type for FormData (browser will set the boundary)
+    },
+    body: fd,
+  });
+
+  if (!res.ok) {
+    const txt = await res.text();
+    throw new Error(txt || "Failed to update apartment");
+  }
+  return res.json();
+};
+
+/**
+ * Component
+ */
 const EditApartment: React.FC = () => {
   const router = useRouter();
-  const { id } = useParams();
-  const  session  = useSession();
-  const token = session?.data?.accessToken;
+  // next/navigation useParams typing is loose — cast safely
+  const params = useParams() as { id?: string } | undefined;
+  const id = params?.id;
 
-  const [formData, setFormData] = useState<FormData>({
+  const sessionResult = useSession();
+  const session = sessionResult.data as ExtendedSession | null;
+
+  // token extraction: try a few common places, keep optional
+  const token =
+    session?.accessToken ?? session?.token ?? session?.user?.accessToken ?? session?.user?.token ?? "";
+
+  const [form, setForm] = useState<ApartmentForm>({
     title: "",
     description: "",
     aboutListing: "",
@@ -103,187 +191,136 @@ const EditApartment: React.FC = () => {
     month: "",
     availableTime: "",
   });
+
   const [images, setImages] = useState<MediaFile[]>([]);
   const [videos, setVideos] = useState<MediaFile[]>([]);
-  const [errors, setErrors] = useState<Partial<FormData>>({});
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [errors, setErrors] = useState<Partial<ApartmentForm>>({});
+  const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
 
-  const { data, isLoading, error } = useQuery<ApartmentResponse>({
-    queryKey: ["apartment", id],
+  const { data, isLoading, error } = useQuery<ApartmentResponse, Error>({
+    queryKey: ["apartment", id ?? "none"],
     queryFn: () => fetchApartment(id as string),
-    enabled: !!id,
+    enabled: Boolean(id),
   });
 
-  // Populate form data when API data is available
-  React.useEffect(() => {
-    if (data?.data) {
-      const { data: apartment } = data;
-      setFormData({
-        title: apartment.title,
-        description: apartment.description,
-        aboutListing: apartment.aboutListing,
-        price: apartment.price.toString(),
-        bedrooms: apartment.bedrooms.toString(),
-        bathrooms: apartment.bathrooms.toString(),
-        squareFeet: apartment.squareFeet.toString(),
-        street: apartment.address.street,
-        city: apartment.address.city,
-        state: apartment.address.state,
-        zipCode: apartment.address.zipCode,
-        amenities: apartment.amenities,
-        day: apartment.day,
-        month: apartment.availableFrom.month,
-        availableTime: apartment.availableFrom.time.slice(0, 16), // Format for datetime-local
-      });
-      setImages(apartment.images.map((url) => ({ url })));
-      setVideos(apartment.videos.map((url) => ({ url })));
-    }
+  // populate form when data loads
+  useEffect(() => {
+    if (!data?.data) return;
+    const apt = data.data;
+    setForm({
+      title: apt.title ?? "",
+      description: apt.description ?? "",
+      aboutListing: apt.aboutListing ?? "",
+      price: apt.price !== undefined ? String(apt.price) : "",
+      bedrooms: apt.bedrooms !== undefined ? String(apt.bedrooms) : "",
+      bathrooms: apt.bathrooms !== undefined ? String(apt.bathrooms) : "",
+      squareFeet: apt.squareFeet !== undefined ? String(apt.squareFeet) : "",
+      street: apt.address?.street ?? "",
+      city: apt.address?.city ?? "",
+      state: apt.address?.state ?? "",
+      zipCode: apt.address?.zipCode ?? "",
+      amenities: apt.amenities ?? [],
+      day: apt.day ?? "",
+      month: apt.availableFrom?.month ?? "",
+      availableTime: toDatetimeLocal(apt.availableFrom?.time),
+    });
+
+    setImages((apt.images || []).map((u) => ({ url: u, remote: true })));
+    setVideos((apt.videos || []).map((u) => ({ url: u, remote: true })));
   }, [data]);
 
-  const handleInputChange = (
-    e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>
-  ) => {
+  // input handlers
+  const handleInputChange = (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
-    setFormData((prev) => ({
-      ...prev,
-      [name]: value,
-    }));
-    setErrors((prev) => ({ ...prev, [name]: "" }));
+    setForm((prev) => ({ ...prev, [name]: value } as ApartmentForm));
+    setErrors((prev) => ({ ...prev, [name]: undefined }));
   };
 
   const handleAmenitiesChange = (e: ChangeEvent<HTMLInputElement>) => {
     const { value, checked } = e.target;
-    setFormData((prev) => ({
+    setForm((prev) => ({
       ...prev,
-      amenities: checked
-        ? [...prev.amenities, value]
-        : prev.amenities.filter((amenity) => amenity !== value),
+      amenities: checked ? [...prev.amenities, value] : prev.amenities.filter((a) => a !== value),
     }));
   };
 
   const handleImageChange = (e: ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files) {
-      const files = Array.from(e.target.files);
-      const newImages: MediaFile[] = files.map((file) => ({
-        file,
-        url: URL.createObjectURL(file),
-      }));
-      setImages((prev) => [...prev, ...newImages].slice(0, 5));
-    }
+    if (!e.target.files) return;
+    const files = Array.from(e.target.files);
+    const newImages: MediaFile[] = files.map((f) => ({ file: f, url: URL.createObjectURL(f) }));
+    setImages((prev) => [...prev, ...newImages].slice(0, 5));
   };
 
   const handleVideoChange = (e: ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files) {
-      const files = Array.from(e.target.files);
-      const newVideos: MediaFile[] = files.map((file) => ({
-        file,
-        url: URL.createObjectURL(file),
-      }));
-      setVideos((prev) => [...prev, ...newVideos].slice(0, 5));
-    }
+    if (!e.target.files) return;
+    const files = Array.from(e.target.files);
+    const newVideos: MediaFile[] = files.map((f) => ({ file: f, url: URL.createObjectURL(f) }));
+    setVideos((prev) => [...prev, ...newVideos].slice(0, 5));
   };
 
-  const removeImage = (index: number) => {
-    setImages((prev) => prev.filter((_, i) => i !== index));
-  };
+  const removeImage = (index: number) => setImages((prev) => prev.filter((_, i) => i !== index));
+  const removeVideo = (index: number) => setVideos((prev) => prev.filter((_, i) => i !== index));
 
-  const removeVideo = (index: number) => {
-    setVideos((prev) => prev.filter((_, i) => i !== index));
-  };
-
-  const validateForm = (): boolean => {
-    const newErrors: Partial<FormData> = {};
-
-    if (!formData.title) newErrors.title = "Title is required";
-    if (!formData.description) newErrors.description = "Description is required";
-    if (!formData.price || isNaN(Number(formData.price)))
-      newErrors.price = "Valid price is required";
-    if (!formData.bedrooms || isNaN(Number(formData.bedrooms)))
-      newErrors.bedrooms = "Valid number of bedrooms is required";
-    if (!formData.bathrooms || isNaN(Number(formData.bathrooms)))
-      newErrors.bathrooms = "Valid number of bathrooms is required";
-    if (!formData.squareFeet || isNaN(Number(formData.squareFeet)))
-      newErrors.squareFeet = "Valid square footage is required";
-    if (!formData.street) newErrors.street = "Street is required";
-    if (!formData.city) newErrors.city = "City is required";
-    if (!formData.state) newErrors.state = "State is required";
-    if (!formData.zipCode) newErrors.zipCode = "Zip code is required";
-    if (!formData.day) newErrors.day = "Day is required";
-    if (!formData.month) newErrors.month = "Month is required";
-    if (!formData.availableTime) newErrors.availableTime = "Available time is required";
-    if (images.length === 0) toast.error("At least one image is required");
+  const validate = (): boolean => {
+    const newErrors: Partial<ApartmentForm> = {};
+    if (!form.title) newErrors.title = "Title is required";
+    if (!form.description) newErrors.description = "Description is required";
+    if (!form.price || Number.isNaN(Number(form.price))) newErrors.price = "Valid price required";
+    if (!form.bedrooms || Number.isNaN(Number(form.bedrooms))) newErrors.bedrooms = "Valid bedrooms";
+    if (!form.bathrooms || Number.isNaN(Number(form.bathrooms))) newErrors.bathrooms = "Valid bathrooms";
+    if (!form.squareFeet || Number.isNaN(Number(form.squareFeet))) newErrors.squareFeet = "Valid squareFeet";
+    if (!form.street) newErrors.street = "Street required";
+    if (!form.city) newErrors.city = "City required";
+    if (!form.state) newErrors.state = "State required";
+    if (!form.zipCode) newErrors.zipCode = "Zip required";
+    if (!form.day) newErrors.day = "Day required";
+    if (!form.month) newErrors.month = "Month required";
+    if (!form.availableTime) newErrors.availableTime = "Available time required";
 
     setErrors(newErrors);
+
+    if (images.length === 0) toast.error("At least one image is required");
     return Object.keys(newErrors).length === 0 && images.length > 0;
   };
 
-  const updateApartment = async ({ id, data }: { id: string; data: FormData }) => {
-    const formDataToSend = new FormData();
-
-    formDataToSend.append("title", data.title);
-    formDataToSend.append("description", data.description);
-    formDataToSend.append("aboutListing", data.aboutListing);
-    formDataToSend.append("price", data.price);
-    formDataToSend.append("bedrooms", data.bedrooms);
-    formDataToSend.append("bathrooms", data.bathrooms);
-    formDataToSend.append("squareFeet", data.squareFeet);
-    formDataToSend.append("address[street]", data.street);
-    formDataToSend.append("address[city]", data.city);
-    formDataToSend.append("address[state]", data.state);
-    formDataToSend.append("address[zipCode]", data.zipCode);
-    data.amenities.forEach((amenity, index) => {
-      formDataToSend.append(`amenities[${index}]`, amenity);
-    });
-    formDataToSend.append("day", data.day);
-    formDataToSend.append("availableFrom[month]", data.month);
-    formDataToSend.append("availableFrom[time]", new Date(data.availableTime).toISOString());
-
-    images.forEach((image) => {
-      if (image.file) {
-        formDataToSend.append("images", image.file);
-      }
-    });
-    videos.forEach((video) => {
-      if (video.file) {
-        formDataToSend.append("videos", video.file);
-      }
-    });
-
-    const response = await fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL}/apartment/${id}`, {
-      method: "PUT",
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-      body: formDataToSend,
-    });
-
-    if (!response.ok) {
-      throw new Error("Failed to update apartment data");
-    }
-    return response.json();
-  };
-
-  const updateMutation = useMutation({
-    mutationFn: updateApartment,
+  // mutation
+  const mutation = useMutation({
+    mutationFn: async (vars: { id: string; payload: ApartmentForm; images: MediaFile[]; videos: MediaFile[]; token?: string }) =>
+      updateApartmentApi(vars.id, vars.payload, vars.images, vars.videos, vars.token),
     onSuccess: () => {
-      toast.success("Apartment updated successfully!", { position: "top-right" });
-      setTimeout(() => router.push("/apartment-listings"), 1000);
+      toast.success("Apartment updated successfully!");
+      router.push("/apartment-listings");
     },
-    onError: (error: Error) => {
-      toast.error(`Failed to update apartment: ${error.message}`, { position: "top-right" });
+    onError: (e: any) => {
+      const msg = e?.message ?? "Failed to update apartment";
+      toast.error(msg);
     },
   });
 
-  const handlePublish = () => {
-    if (!validateForm()) return;
+  const handlePublish = async () => {
+    if (!id) {
+      toast.error("Missing apartment id");
+      return;
+    }
+    if (!token) {
+      toast.error("Not authenticated. Please login.");
+      return;
+    }
+    if (!validate()) return;
 
-    setIsSubmitting(true);
-    updateMutation.mutate({ id: id as string, data: formData });
-    setIsSubmitting(false);
+    try {
+      setIsSubmitting(true);
+      await mutation.mutateAsync({ id, payload: form, images, videos, token });
+    } catch (e) {
+      // onError handles notification
+      console.error(e);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   if (error) {
-    return <div className="text-red-500 p-4">Error loading apartment data: {error.message}</div>;
+    return <div className="text-red-500 p-4">Error loading apartment: {error.message}</div>;
   }
 
   return (
@@ -295,207 +332,69 @@ const EditApartment: React.FC = () => {
           <div className="col-span-2">
             <div className="space-y-6">
               {isLoading ? (
-                <div className="space-y-6 animate-pulse">
+                <div className="animate-pulse">
                   <div className="h-6 bg-gray-200 rounded w-1/4 mb-2"></div>
-                  <div className="h-12 bg-gray-200 rounded"></div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <div className="h-6 bg-gray-200 rounded w-1/4 mb-2"></div>
-                      <div className="h-12 bg-gray-200 rounded"></div>
-                    </div>
-                    <div>
-                      <div className="h-6 bg-gray-200 rounded w-1/4 mb-2"></div>
-                      <div className="h-12 bg-gray-200 rounded"></div>
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <div className="h-6 bg-gray-200 rounded w-1/4 mb-2"></div>
-                      <div className="h-12 bg-gray-200 rounded"></div>
-                    </div>
-                    <div>
-                      <div className="h-6 bg-gray-200 rounded w-1/4 mb-2"></div>
-                      <div className="h-12 bg-gray-200 rounded"></div>
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-4 gap-4">
-                    <div>
-                      <div className="h-6 bg-gray-200 rounded w-1/4 mb-2"></div>
-                      <div className="h-12 bg-gray-200 rounded"></div>
-                    </div>
-                    <div>
-                      <div className="h-6 bg-gray-200 rounded w-1/4 mb-2"></div>
-                      <div className="h-12 bg-gray-200 rounded"></div>
-                    </div>
-                    <div>
-                      <div className="h-6 bg-gray-200 rounded w-1/4 mb-2"></div>
-                      <div className="h-12 bg-gray-200 rounded"></div>
-                    </div>
-                    <div>
-                      <div className="h-6 bg-gray-200 rounded w-1/4 mb-2"></div>
-                      <div className="h-12 bg-gray-200 rounded"></div>
-                    </div>
-                  </div>
-                  <div>
-                    <div className="h-6 bg-gray-200 rounded w-1/4 mb-2"></div>
-                    <div className="h-12 bg-gray-200 rounded"></div>
-                  </div>
-                  <div>
-                    <div className="h-6 bg-gray-200 rounded w-1/4 mb-2"></div>
-                    <div className="h-[341px] bg-gray-200 rounded"></div>
-                  </div>
-                  <div>
-                    <div className="h-6 bg-gray-200 rounded w-1/4 mb-2"></div>
-                    <div className="h-[341px] bg-gray-200 rounded"></div>
-                  </div>
                 </div>
               ) : (
                 <>
                   <div>
-                    <label className="block text-base font-medium text-[#000000] mb-2">Add Title</label>
-                    <Input
-                      type="text"
-                      name="title"
-                      value={formData.title}
-                      onChange={handleInputChange}
-                      placeholder="Add your title..."
-                      className={`w-full px-4 py-2 border rounded-[4px] h-[48px] focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder:text-[#B6B6B6] ${
-                        errors.title ? "border-red-500" : "border-[#B6B6B6]"
-                      }`}
-                    />
+                    <label className="block text-base font-medium mb-2">Add Title</label>
+                    <Input name="title" value={form.title} onChange={handleInputChange} placeholder="Add your title..." />
                     {errors.title && <p className="text-red-500 text-sm mt-1">{errors.title}</p>}
                   </div>
 
                   <div className="grid grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-base font-medium text-[#000000] mb-2">Street</label>
-                      <Input
-                        type="text"
-                        name="street"
-                        value={formData.street}
-                        onChange={handleInputChange}
-                        placeholder="House 15, Road 27"
-                        className={`w-full px-4 py-2 border rounded-[4px] h-[48px] focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder:text-[#B6B6B6] ${
-                          errors.street ? "border-red-500" : "border-[#B6B6B6]"
-                        }`}
-                      />
+                      <label className="block text-base font-medium mb-2">Street</label>
+                      <Input name="street" value={form.street} onChange={handleInputChange} placeholder="House 15, Road 27" />
                       {errors.street && <p className="text-red-500 text-sm mt-1">{errors.street}</p>}
                     </div>
                     <div>
-                      <label className="block text-base font-medium text-[#000000] mb-2">City</label>
-                      <Input
-                        type="text"
-                        name="city"
-                        value={formData.city}
-                        onChange={handleInputChange}
-                        placeholder="Dhaka"
-                        className={`w-full px-4 py-2 border rounded-[4px] h-[48px] focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder:text-[#B6B6B6] ${
-                          errors.city ? "border-red-500" : "border-[#B6B6B6]"
-                        }`}
-                      />
+                      <label className="block text-base font-medium mb-2">City</label>
+                      <Input name="city" value={form.city} onChange={handleInputChange} placeholder="Dhaka" />
                       {errors.city && <p className="text-red-500 text-sm mt-1">{errors.city}</p>}
                     </div>
                     <div>
-                      <label className="block text-base font-medium text-[#000000] mb-2">State</label>
-                      <Input
-                        type="text"
-                        name="state"
-                        value={formData.state}
-                        onChange={handleInputChange}
-                        placeholder="Dhaka Division"
-                        className={`w-full px-4 py-2 border rounded-[4px] h-[48px] focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder:text-[#B6B6B6] ${
-                          errors.state ? "border-red-500" : "border-[#B6B6B6]"
-                        }`}
-                      />
+                      <label className="block text-base font-medium mb-2">State</label>
+                      <Input name="state" value={form.state} onChange={handleInputChange} placeholder="Dhaka Division" />
                       {errors.state && <p className="text-red-500 text-sm mt-1">{errors.state}</p>}
                     </div>
                     <div>
-                      <label className="block text-base font-medium text-[#000000] mb-2">Zip Code</label>
-                      <Input
-                        type="text"
-                        name="zipCode"
-                        value={formData.zipCode}
-                        onChange={handleInputChange}
-                        placeholder="1209"
-                        className={`w-full px-4 py-2 border rounded-[4px] h-[48px] focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder:text-[#B6B6B6] ${
-                          errors.zipCode ? "border-red-500" : "border-[#B6B6B6]"
-                        }`}
-                      />
+                      <label className="block text-base font-medium mb-2">Zip Code</label>
+                      <Input name="zipCode" value={form.zipCode} onChange={handleInputChange} placeholder="1209" />
                       {errors.zipCode && <p className="text-red-500 text-sm mt-1">{errors.zipCode}</p>}
                     </div>
                   </div>
 
                   <div className="grid grid-cols-4 gap-4">
                     <div>
-                      <label className="block text-base font-medium text-[#000000] mb-2">Price</label>
-                      <Input
-                        type="number"
-                        name="price"
-                        value={formData.price}
-                        onChange={handleInputChange}
-                        placeholder="Add price..."
-                        className={`w-full px-4 py-2 border rounded-[4px] h-[48px] focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder:text-[#B6B6B6] ${
-                          errors.price ? "border-red-500" : "border-[#B6B6B6]"
-                        }`}
-                      />
+                      <label className="block text-base font-medium mb-2">Price</label>
+                      <Input type="number" name="price" value={form.price} onChange={handleInputChange} />
                       {errors.price && <p className="text-red-500 text-sm mt-1">{errors.price}</p>}
                     </div>
                     <div>
-                      <label className="block text-base font-medium text-[#000000] mb-2">Bedrooms</label>
-                      <Input
-                        type="number"
-                        name="bedrooms"
-                        value={formData.bedrooms}
-                        onChange={handleInputChange}
-                        placeholder="Write here"
-                        className={`w-full px-4 py-2 border rounded-[4px] h-[48px] focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder:text-[#B6B6B6] ${
-                          errors.bedrooms ? "border-red-500" : "border-[#B6B6B6]"
-                        }`}
-                      />
+                      <label className="block text-base font-medium mb-2">Bedrooms</label>
+                      <Input type="number" name="bedrooms" value={form.bedrooms} onChange={handleInputChange} />
                       {errors.bedrooms && <p className="text-red-500 text-sm mt-1">{errors.bedrooms}</p>}
                     </div>
                     <div>
-                      <label className="block text-base font-medium text-[#000000] mb-2">Bathrooms</label>
-                      <Input
-                     type="number"
-                        name="bathrooms"
-                        value={formData.bathrooms}
-                        onChange={handleInputChange}
-                        placeholder="Write here"
-                        className={`w-full px-4 py-2 border rounded-[4px] h-[48px] focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder:text-[#B6B6B6] ${
-                          errors.bathrooms ? "border-red-500" : "border-[#B6B6B6]"
-                        }`}
-                      />
+                      <label className="block text-base font-medium mb-2">Bathrooms</label>
+                      <Input type="number" name="bathrooms" value={form.bathrooms} onChange={handleInputChange} />
                       {errors.bathrooms && <p className="text-red-500 text-sm mt-1">{errors.bathrooms}</p>}
                     </div>
                     <div>
-                      <label className="block text-base font-medium text-[#000000] mb-2">Square Feet</label>
-                      <Input
-                       type="number"
-                        name="squareFeet"
-                        value={formData.squareFeet}
-                        onChange={handleInputChange}
-                        placeholder="Write here"
-                        className={`w-full px-4 py-2 border rounded-[4px] h-[48px] focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder:text-[#B6B6B6] ${
-                          errors.squareFeet ? "border-red-500" : "border-[#B6B6B6]"
-                        }`}
-                      />
+                      <label className="block text-base font-medium mb-2">Square Feet</label>
+                      <Input type="number" name="squareFeet" value={form.squareFeet} onChange={handleInputChange} />
                       {errors.squareFeet && <p className="text-red-500 text-sm mt-1">{errors.squareFeet}</p>}
                     </div>
                   </div>
 
                   <div>
-                    <label className="block text-base font-medium text-[#000000] mb-2">Amenities</label>
+                    <label className="block text-base font-medium mb-2">Amenities</label>
                     <div className="grid grid-cols-3 gap-2">
                       {["Parking", "Lift", "Security", "Balcony", "Generator", "Air Conditioning"].map((amenity) => (
                         <label key={amenity} className="flex items-center space-x-2">
-                          <input
-                            type="checkbox"
-                            value={amenity}
-                            checked={formData.amenities.includes(amenity)}
-                            onChange={handleAmenitiesChange}
-                            className="h-4 w-4"
-                          />
+                          <input type="checkbox" value={amenity} checked={form.amenities.includes(amenity)} onChange={handleAmenitiesChange} />
                           <span>{amenity}</span>
                         </label>
                       ))}
@@ -504,15 +403,8 @@ const EditApartment: React.FC = () => {
 
                   <div className="grid grid-cols-3 gap-4">
                     <div>
-                      <label className="block text-base font-medium text-[#000000] mb-2">Day</label>
-                      <select
-                        name="day"
-                        value={formData.day}
-                        onChange={handleInputChange}
-                        className={`w-full px-4 py-2 border rounded-[4px] h-[48px] focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder:text-[#B6B6B6] ${
-                          errors.day ? "border-red-500" : "border-[#B6B6B6]"
-                        }`}
-                      >
+                      <label className="block text-base font-medium mb-2">Day</label>
+                      <select name="day" value={form.day} onChange={handleInputChange}>
                         <option value="">Select a day</option>
                         <option value="monday">Monday</option>
                         <option value="tuesday">Tuesday</option>
@@ -524,16 +416,10 @@ const EditApartment: React.FC = () => {
                       </select>
                       {errors.day && <p className="text-red-500 text-sm mt-1">{errors.day}</p>}
                     </div>
+
                     <div>
-                      <label className="block text-base font-medium text-[#000000] mb-2">Select Month</label>
-                      <select
-                        name="month"
-                        value={formData.month}
-                        onChange={handleInputChange}
-                        className={`w-full px-4 py-2 border rounded-[4px] h-[48px] focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder:text-[#B6B6B6] ${
-                          errors.month ? "border-red-500" : "border-[#B6B6B6]"
-                        }`}
-                      >
+                      <label className="block text-base font-medium mb-2">Select Month</label>
+                      <select name="month" value={form.month} onChange={handleInputChange}>
                         <option value="">Select</option>
                         <option>January</option>
                         <option>February</option>
@@ -550,48 +436,23 @@ const EditApartment: React.FC = () => {
                       </select>
                       {errors.month && <p className="text-red-500 text-sm mt-1">{errors.month}</p>}
                     </div>
+
                     <div>
-                      <label className="block text-base font-medium text-[#000000] mb-2">Available Time</label>
-                      <Input
-                        type="datetime-local"
-                        name="availableTime"
-                        value={formData.availableTime}
-                        onChange={handleInputChange}
-                        className={`w-full px-4 py-2 border rounded-[4px] h-[48px] focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder:text-[#B6B6B6] ${
-                          errors.availableTime ? "border-red-500" : "border-[#B6B6B6]"
-                        }`}
-                      />
+                      <label className="block text-base font-medium mb-2">Available Time</label>
+                      <Input type="datetime-local" name="availableTime" value={form.availableTime} onChange={handleInputChange} />
                       {errors.availableTime && <p className="text-red-500 text-sm mt-1">{errors.availableTime}</p>}
                     </div>
                   </div>
 
                   <div>
-                    <label className="block text-base font-medium text-[#000000] mb-2">Description</label>
-                    <Textarea
-                      name="description"
-                      value={formData.description}
-                      onChange={handleInputChange}
-                      placeholder="Description..."
-                      rows={6}
-                      className={`w-full px-4 py-2 border rounded-[4px] h-[341px] placeholder:text-[#B6B6B6] ${
-                        errors.description ? "border-red-500" : "border-[#B6B6B6]"
-                      }`}
-                    />
+                    <label className="block text-base font-medium mb-2">Description</label>
+                    <Textarea name="description" value={form.description} onChange={handleInputChange} rows={6} />
                     {errors.description && <p className="text-red-500 text-sm mt-1">{errors.description}</p>}
                   </div>
 
                   <div>
-                    <label className="block text-base font-medium text-[#000000] mb-2">About Listing</label>
-                    <Textarea
-                      name="aboutListing"
-                      value={formData.aboutListing}
-                      onChange={handleInputChange}
-                      placeholder="Description..."
-                      rows={6}
-                      className={`w-full px-4 py-2 border rounded-[4px] h-[341px] placeholder:text-[#B6B6B6] ${
-                        errors.aboutListing ? "border-red-500" : "border-[#B6B6B6]"
-                      }`}
-                    />
+                    <label className="block text-base font-medium mb-2">About Listing</label>
+                    <Textarea name="aboutListing" value={form.aboutListing} onChange={handleInputChange} rows={6} />
                     {errors.aboutListing && <p className="text-red-500 text-sm mt-1">{errors.aboutListing}</p>}
                   </div>
                 </>
@@ -601,48 +462,23 @@ const EditApartment: React.FC = () => {
 
           <div className="col-span-1 space-y-6 border">
             {isLoading ? (
-              <div className="space-y-6 animate-pulse">
-                <div className="p-6">
-                  <div className="h-6 bg-gray-200 rounded w-1/4 mb-3"></div>
-                  <div className="h-12 bg-gray-200 rounded"></div>
-                </div>
-                <div className="p-6">
-                  <div className="h-6 bg-gray-200 rounded w-1/4 mb-3"></div>
-                  <div className="border-2 border-dashed border-[#B6B6B6] rounded-[4px] h-[414px] bg-gray-200"></div>
-                </div>
-                <div className="p-6">
-                  <div className="h-6 bg-gray-200 rounded w-1/4 mb-3"></div>
-                  <div className="border-2 border-dashed border-[#B6B6B6] rounded-[4px] h-[414px] bg-gray-200"></div>
-                </div>
+              <div className="p-6 animate-pulse">
+                <div className="h-6 bg-gray-200 rounded w-1/4 mb-3"></div>
               </div>
             ) : (
               <>
                 <div className="p-6">
-                  <label className="block text-base font-medium text-[#000000] mb-3">Thumbnail</label>
-                  <div className="border-2 border-dashed border-[#B6B6B6] rounded-[4px] h-[414px] p-8 text-center relative">
-                    <input
-                      type="file"
-                      accept="image/*"
-                      multiple
-                      onChange={handleImageChange}
-                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                    />
-                    <Upload className="w-12 h-12 text-gray-400 mx-auto mb-2" />
-                    <p className="text-sm text-gray-600">Drag and drop or click to upload images</p>
+                  <label className="block text-base font-medium mb-3">Thumbnail</label>
+                  <div className="border-2 border-dashed rounded h-[414px] p-8 text-center relative">
+                    <input type="file" accept="image/*" multiple onChange={handleImageChange} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+                    <Upload className="w-12 h-12 mx-auto mb-2" />
+                    <p className="text-sm">Drag and drop or click to upload images</p>
                     <div className="flex flex-wrap gap-2 mt-4 absolute bottom-4 left-4 right-4">
-                      {images.map((image, index) => (
-                        <div key={index} className="relative w-12 h-12">
-                          <Image
-                            src={image.url}
-                            alt={`Thumbnail ${index + 1}`}
-                            width={1000}
-                            height={1000}
-                            className="w-12 h-12 object-cover rounded-[4px]"
-                          />
-                          <button
-                            onClick={() => removeImage(index)}
-                            className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center"
-                          >
+                      {images.map((img, i) => (
+                        <div key={i} className="relative w-12 h-12">
+                          {/* next/image requires domain config for remote images; if not configured, use <img /> */}
+                          <Image src={img.url} alt={`img-${i}`} width={1000} height={1000} className="w-12 h-12 object-cover rounded" />
+                          <button type="button" onClick={() => removeImage(i)} className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center">
                             <X className="w-3 h-3" />
                           </button>
                         </div>
@@ -652,28 +488,16 @@ const EditApartment: React.FC = () => {
                 </div>
 
                 <div className="p-6">
-                  <label className="block text-base font-medium text-[#000000] mb-3">Videos</label>
-                  <div className="border-2 border-dashed border-[#B6B6B6] rounded-[4px] h-[414px] p-8 text-center relative">
-                    <input
-                      type="file"
-                      accept="video/*"
-                      multiple
-                      onChange={handleVideoChange}
-                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                    />
-                    <Play className="w-12 h-12 text-gray-400 mx-auto mb-2" />
-                    <p className="text-sm text-gray-600">Drag and drop or click to upload videos</p>
+                  <label className="block text-base font-medium mb-3">Videos</label>
+                  <div className="border-2 border-dashed rounded h-[414px] p-8 text-center relative">
+                    <input type="file" accept="video/*" multiple onChange={handleVideoChange} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+                    <Play className="w-12 h-12 mx-auto mb-2" />
+                    <p className="text-sm">Drag and drop or click to upload videos</p>
                     <div className="flex flex-wrap gap-2 mt-4 absolute bottom-4 left-4 right-4">
-                      {videos.map((video, index) => (
-                        <div key={index} className="relative w-12 h-12">
-                          <video
-                            src={video.url}
-                            className="w-12 h-12 object-cover rounded-[4px]"
-                          />
-                          <button
-                            onClick={() => removeVideo(index)}
-                            className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center"
-                          >
+                      {videos.map((v, i) => (
+                        <div key={i} className="relative w-12 h-12">
+                          <video src={v.url} className="w-12 h-12 object-cover rounded" />
+                          <button type="button" onClick={() => removeVideo(i)} className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center">
                             <X className="w-3 h-3" />
                           </button>
                         </div>
@@ -687,14 +511,8 @@ const EditApartment: React.FC = () => {
         </div>
 
         <div className="flex justify-end mt-10 pb-2">
-          <Button
-            onClick={handlePublish}
-            disabled={isSubmitting || isLoading}
-            className={`bg-[#0F3D61] hover:bg-[#0F3D61]/90 h-[48px] rounded-[8px] text-white px-8 ${
-              isSubmitting || isLoading ? "opacity-50 cursor-not-allowed" : ""
-            }`}
-          >
-            {isSubmitting ? "Updating..." : "Update"}
+          <Button className="bg-[#0F3D61] hover:bg-[#0F3D61]/90 h-[48px] rounded-[8px] text-white px-8" onClick={handlePublish} disabled={isSubmitting || isLoading }>
+            {isSubmitting  ? "Updating..." : "Update"}
           </Button>
         </div>
       </div>

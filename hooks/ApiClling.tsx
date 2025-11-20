@@ -132,7 +132,7 @@ export function useAssignedConstractor(token: string, onSuccessCallback?: () => 
     return useMutation({
         mutationFn: (payload: { exterminationId: string; constractorId: string }) => addAssingnedContractor(token, payload),
         onSuccess: () => {
-            toast.success("constractor updated successfully");
+            toast.success("Assign Contractor successfully");
             queryClient.invalidateQueries({ queryKey: ["constractor"] });
             if (onSuccessCallback) onSuccessCallback();
         },

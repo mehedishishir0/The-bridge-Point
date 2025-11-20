@@ -291,7 +291,7 @@ const EditApartment: React.FC = () => {
       toast.success("Apartment updated successfully!");
       router.push("/apartment-listings");
     },
-    onError: (e: any) => {
+    onError: (e) => {
       const msg = e?.message ?? "Failed to update apartment";
       toast.error(msg);
     },
